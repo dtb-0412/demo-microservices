@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Demo Microservices</title>
+<style>
+  body{font-family:Segoe UI,sans-serif;background:#f3f4f6;margin:0;padding:20px;color:#111}
+  h1{margin:0 0 16px;font-size:22px}
+  h2{font-size:15px;margin:0 0 10px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .card{background:#fff;border-radius:8px;padding:14px;box-shadow:0 1px 3px #0002;flex:1;min-width:210px}
+  .dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;background:#9ca3af}
+  .dot.up{background:#16a34a}.dot.down{background:#dc2626}
+  button{padding:7px 12px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;margin:3px 3px 0 0}
+  button.red{background:#dc2626}button.green{background:#16a34a}button.gray{background:#6b7280}
+  button:disabled{opacity:.5;cursor:wait}
+  .badge{display:inline-block;padding:4px 14px;border-radius:12px;color:#fff;font-weight:600;background:#16a34a}
+  .badge.OPEN{background:#dc2626}.badge.HALF-OPEN{background:#f59e0b}
+  #hint{font-size:13px;color:#6b7280;margin-top:6px}
+  #log{background:#fff;border-radius:8px;padding:10px;height:340px;overflow:auto;font-size:13px}
+  .item{border-left:4px solid #9ca3af;padding:4px 8px;margin-bottom:6px;background:#f9fafb}
+  .item.ok{border-color:#16a34a}.item.warn{border-color:#f59e0b}.item.err{border-color:#dc2626}
+  .item small{color:#6b7280}
+  pre{margin:2px 0 0;white-space:pre-wrap;word-break:break-all;font-size:12px}
+</style>
+</head>
+<body>
+<h1>Demo Microservices: Mini E-commerce</h1>
+
+<div class="row" id="services"></div>
+
+<div class="row">
+  <div class="card">
+    <h2>Circuit Breaker (Order → Product)</h2>
+    <span class="badge" id="breaker">CLOSED</span>
+    <div id="hint">Bình thường: request được chuyển tiếp sang Product Service.</div>
+  </div>
+  <div class="card">
+    <h2>Kiểm thử (qua Gateway)</h2>
+    <button onclick="call('Xem sản phẩm','GET','/products')">Xem sản phẩm</button>
+    <button onclick="call('Đặt hàng hợp lệ','POST','/orders',{productId:2,quantity:1})">Đặt hàng hợp lệ</button>
+    <button onclick="call('Đặt vượt tồn kho','POST','/orders',{productId:1,quantity:999})">Đặt vượt tồn kho</button>
+    <button onclick="call('Xem đơn hàng','GET','/orders')">Xem đơn hàng</button>
+    <button class="gray" onclick="five()">Đặt 5 lần liên tiếp</button>
+    <button class="gray" onclick="document.getElementById('log').innerHTML=''">Xóa log</button>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<script>
+const NAMES = { gateway: 'Gateway (3000)', 'product-service': 'Product Service (3001)', 'order-service': 'Order Service (3002)' };
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const RESET_MS = 10000;
+let breaker = 'CLOSED', openedAt = 0;
+
+async function api(url, body) {
+  const r = await fetch(url, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return r.json();
+}
+
+// ----- Dịch vụ -----
+$('services').innerHTML = Object.entries(NAMES).map(([n, label]) => `
+  <div class="card">
+    <h2>${label}</h2>
+    <div><span class="dot" id="dot-${n}"></span><span id="txt-${n}">...</span></div>
+    <button class="green" onclick="ctl('start','${n}')">Bật</button>
+    <button class="red" onclick="ctl('stop','${n}')">Tắt</button>
+  </div>`).join('');
+
+async function refresh() {
+  const s = await api('/api/status');
+  for (const n in NAMES) {
+    $('dot-' + n).className = 'dot ' + (s[n] ? 'up' : 'down');
+    $('txt-' + n).textContent = s[n] ? 'Đang chạy' : 'Đã tắt';
+  }
+}
+
+function busy(b) { document.querySelectorAll('button').forEach((x) => (x.disabled = b)); }
+
+async function ctl(action, name) {
+  busy(true);
+  addLog(`${action === 'stop' ? 'TẮT' : 'BẬT'} ${NAMES[name]}...`, 'warn');
+  const r = await api('/api/docker', { action, service: name });
+  if (action === 'start') await sleep(3000);
+  addLog(r.ok ? 'Hoàn tất' : 'Lỗi: ' + r.error, r.ok ? 'ok' : 'err');
+  busy(false);
+  refresh();
+}
+
+// ----- Circuit breaker -----
+function setBreaker(s) {
+  if (s === 'OPEN' && breaker !== 'OPEN') openedAt = Date.now();
+  breaker = s;
+  $('breaker').textContent = s;
+  $('breaker').className = 'badge ' + s;
+}
+
+setInterval(() => {
+  if (breaker === 'OPEN') {
+    const left = Math.ceil((RESET_MS - (Date.now() - openedAt)) / 1000);
+    $('hint').textContent = left > 0
+      ? `Đang NGẮT: từ chối ngay, không gọi Product. Thử lại sau ${left}s.`
+      : 'Đã hết thời gian chờ: request kế tiếp sẽ là request thử (HALF-OPEN).';
+  } else if (breaker === 'CLOSED') {
+    $('hint').textContent = 'Bình thường: request được chuyển tiếp sang Product Service.';
+  }
+}, 500);
+
+// ----- Kiểm thử -----
+const EXPLAIN = {
+  0: 'Không kết nối được',
+  200: 'Thành công',
+  201: 'Đặt hàng thành công',
+  400: 'Bị từ chối (hết hàng hoặc sai dữ liệu)',
+  503: 'Order không gọi được Product (lỗi có kiểm soát)',
+  502: 'Gateway không kết nối được service phía sau',
+  504: 'Gateway chờ service quá lâu',
+};
+
+async function call(label, method, path, body) {
+  const r = await api('/api/call', { method, path, body });
+  if (r.data && r.data.breaker) setBreaker(r.data.breaker);
+  else if (r.status === 201) setBreaker('CLOSED');
+
+  const cls = r.status >= 200 && r.status < 300 ? 'ok' : r.status >= 400 && r.status < 500 ? 'warn' : 'err';
+  const detail = typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
+  addLog(`${label} → ${r.status || 'LỖI'}: ${EXPLAIN[r.status] || ''} <small>(${r.ms}ms)</small>`, cls, detail.slice(0, 300));
+}
+
+async function five() {
+  busy(true);
+  for (let i = 1; i <= 5; i++) {
+    await call(`Lần ${i}/5: đặt hàng`, 'POST', '/orders', { productId: 2, quantity: 1 });
+    await sleep(300);
+  }
+  busy(false);
+}
+
+function addLog(html, cls, detail) {
+  const t = new Date().toLocaleTimeString('vi-VN');
+  const d = document.createElement('div');
+  d.className = 'item ' + (cls || '');
+  d.innerHTML = `<small>${t}</small> ${html}` + (detail ? `<pre>${detail.replace(/</g, '&lt;')}</pre>` : '');
+  $('log').prepend(d);
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
