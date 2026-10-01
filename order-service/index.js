@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('./db');
-const { reduceStock } = require('./product-client');
+const { reduceStock, getState } = require('./product-client');
 
 const app = express();
 app.use(express.json());
@@ -17,7 +17,7 @@ app.post('/orders', async (req, res) => {
       .run(productId, quantity, total, 'CONFIRMED');
     res.status(201).json({ id: r.lastInsertRowid, productId, quantity, total, status: 'CONFIRMED' });
   } catch (e) {
-    res.status(503).json({ error: 'Product Service unavailable, please try again later' });
+        res.status(503).json({ error: 'Product Service unavailable, please try again later', breaker: getState() });
   }
 });
 
