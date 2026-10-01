@@ -22,6 +22,12 @@
   .item.ok{border-color:#16a34a}.item.warn{border-color:#f59e0b}.item.err{border-color:#dc2626}
   .item small{color:#6b7280}
   pre{margin:2px 0 0;white-space:pre-wrap;word-break:break-all;font-size:12px}
+  .trace{background:#fff;border-radius:8px;padding:10px;margin-bottom:10px;box-shadow:0 1px 3px #0002;font-size:13px}
+  .hop{border-left:4px solid #2563eb;padding:4px 8px;margin:6px 0;background:#f9fafb}
+  .kv{font-family:Consolas,monospace;font-size:12px;color:#374151;word-break:break-all}
+  .st{padding:1px 8px;border-radius:10px;color:#fff;background:#6b7280}
+  .st.s2{background:#16a34a}.st.s4{background:#f59e0b}.st.s5{background:#dc2626}
+  .note{background:#fef3c7;padding:4px 8px;border-radius:4px;margin-top:4px}
 </style>
 </head>
 <body>
@@ -43,10 +49,14 @@
     <button onclick="call('Xem đơn hàng','GET','/orders')">Xem đơn hàng</button>
     <button class="gray" onclick="five()">Đặt 5 lần liên tiếp</button>
     <button class="gray" onclick="document.getElementById('log').innerHTML=''">Xóa log</button>
+    <button class="gray" onclick="clearTraces()">Xóa luồng dữ liệu</button>
   </div>
 </div>
 
 <div id="log"></div>
+
+<h2 style="margin-top:16px">Luồng dữ liệu giữa các service (mới nhất ở trên)</h2>
+<div id="flow"></div>
 
 <script>
 const NAMES = { gateway: 'Gateway (3000)', 'product-service': 'Product Service (3001)', 'order-service': 'Order Service (3002)' };
@@ -149,6 +159,38 @@ function addLog(html, cls, detail) {
   d.innerHTML = `<small>${t}</small> ${html}` + (detail ? `<pre>${detail.replace(/</g, '&lt;')}</pre>` : '');
   $('log').prepend(d);
 }
+
+const LABEL = { client: 'Người dùng', gateway: 'Gateway', 'order-service': 'Order Service', 'product-service': 'Product Service' };
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const js = (o) => (o === undefined ? '(không ghi nhận nội dung)' : esc(JSON.stringify(o)));
+
+async function renderFlow() {
+  const list = await api('/api/traces');
+  $('flow').innerHTML = list.map((g) => {
+    const hasProduct = g.some((e) => e.service === 'product-service');
+    const order = g.find((e) => e.service === 'order-service');
+    let note = '';
+    if (order && order.status === 503 && !hasProduct)
+      note = `<div class="note">Order không nhận được phản hồi từ Product (Product tắt hoặc breaker đang NGẮT, breaker: ${order.resBody && order.resBody.breaker})</div>`;
+    const hops = g.map((e) => `
+      <div class="hop">
+        <b>${LABEL[e.from] || e.from} → ${LABEL[e.service]}</b>
+        <span class="st s${String(e.status)[0]}">${e.status}</span> <small>${e.ms}ms</small>
+        <div>${e.method} ${esc(e.path)}</div>
+        <div class="kv">Gửi đi: ${js(e.reqBody)}</div>
+        <div class="kv">Nhận về: ${js(e.resBody)}</div>
+      </div>`).join('');
+    return `<div class="trace"><small>${new Date(g[0].ts).toLocaleTimeString('vi-VN')} · mã vết ${g[0].traceId}</small>${hops}${note}</div>`;
+  }).join('') || 'Chưa có dữ liệu. Hãy bấm một nút kiểm thử.';
+}
+
+async function clearTraces() {
+  await api('/api/traces/clear', {});
+  renderFlow();
+}
+
+renderFlow();
+setInterval(renderFlow, 1500);
 
 refresh();
 setInterval(refresh, 2000);

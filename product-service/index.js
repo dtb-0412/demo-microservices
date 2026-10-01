@@ -1,8 +1,13 @@
 const express = require('express');
 const db = require('./db');
+const { trace, route, clear } = require('./trace');
 
 const app = express();
 app.use(express.json());
+
+app.use(trace('product-service'));
+app.get('/_trace', route);
+app.delete('/_trace', clear);
 
 app.get('/products', (req, res) => {
   res.json(db.prepare('SELECT * FROM products').all());

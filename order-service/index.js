@@ -1,14 +1,19 @@
 const express = require('express');
 const db = require('./db');
+const { trace, route, clear } = require('./trace');
 const { reduceStock, getState } = require('./product-client');
 
 const app = express();
 app.use(express.json());
 
+app.use(trace('order-service'));
+app.get('/_trace', route);
+app.delete('/_trace', clear);
+
 app.post('/orders', async (req, res) => {
   const { productId, quantity } = req.body;
   try {
-    const { ok, data } = await reduceStock(productId, quantity);
+    const { ok, data } = await reduceStock(productId, quantity, req.traceId);
     if (!ok) return res.status(400).json({ error: data.error });
 
     const total = data.price * quantity;

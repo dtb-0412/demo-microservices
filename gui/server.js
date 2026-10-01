@@ -16,7 +16,7 @@ const readBody = (req) =>
 
 async function isUp(port) {
   try {
-    await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(1000) });
+    await fetch(`http://localhost:${port}/_trace`, { signal: AbortSignal.timeout(1000) });
     return true;
   } catch {
     return false;
@@ -66,6 +66,28 @@ http
       } catch (e) {
         return send(res, { status: 0, ms: Date.now() - t, data: e.message });
       }
+    }
+
+    if (req.url === '/api/traces') {
+      const all = [];
+      await Promise.all(Object.values(PORTS).map(async (p) => {
+        try {
+          const r = await fetch(`http://localhost:${p}/_trace`, { signal: AbortSignal.timeout(1000) });
+          all.push(...(await r.json()));
+        } catch {}
+      }));
+      const groups = {};
+      all.forEach((e) => (groups[e.traceId] ||= []).push(e));
+      const list = Object.values(groups).map((g) => g.sort((a, b) => a.ts - b.ts));
+      list.sort((a, b) => b[0].ts - a[0].ts);
+      return send(res, list.slice(0, 15));
+    }
+
+    if (req.url === '/api/traces/clear') {
+      await Promise.all(Object.values(PORTS).map((p) =>
+        fetch(`http://localhost:${p}/_trace`, { method: 'DELETE', signal: AbortSignal.timeout(1000) }).catch(() => {})
+      ));
+      return send(res, { ok: true });
     }
 
     res.writeHead(404);
